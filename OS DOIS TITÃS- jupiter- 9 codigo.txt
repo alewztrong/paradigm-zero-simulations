@@ -1,0 +1,154 @@
+import rebound
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+
+# ── CONSTANTES E MASSAS ───────────────────────────────────
+AU = 1.496e11; RE = 6.371e6; RE_AU = RE / AU
+M_sol = 1.0
+M_terra = 5.972e24 / 1.989e30
+M_marte = (6.417e23 + 2.3e19) / 1.989e30
+M_lua   = 7.342e22 / 1.989e30
+
+# OS DOIS TITÃS
+M_gigante = 1.33e-04      # 44.2 Massas Terrestres (O Assassino)
+M_jupiter = 317.8 * M_terra # 317.8 Massas Terrestres (O Rei)
+
+print(f"{'═'*60}")
+print(f"  👑 SIMULAÇÃO DE LONGO PRAZO (6 CORPOS - 500 ANOS)")
+print(f"  Monitorando a estabilidade e a fúria de Júpiter...")
+print(f"{'═'*60}")
+
+# ── SIMULAÇÃO REBOUND ─────────────────────────────────────
+sim = rebound.Simulation()
+sim.units = ('yr', 'AU', 'Msun')
+sim.integrator = 'ias15' # Necessário para encontros de altíssima precisão
+
+# Adicionando os corpos internos (Posições iniciais do Cataclismo)
+sim.add(m=M_sol, hash="Sol")
+sim.add(m=M_terra, a=1.0, e=0.016, hash="Terra")
+sim.add(m=M_marte, a=1.3572, e=0.093, f=np.radians(60), hash="Marte")
+sim.add(m=M_lua, primary=sim.particles["Terra"], a=80.0*RE_AU, hash="Lua")
+
+# Adicionando JÚPITER (O Segurança)
+# Colocamos ele em um ângulo inicial neutro (f=120) para o sistema rodar naturalmente
+sim.add(m=M_jupiter, a=5.204, e=0.048, inc=np.radians(1.3), f=np.radians(120), hash="Jupiter")
+
+# Adicionando O GIGANTE INTRUSO (Com a rota que destruiu Marte)
+sim.add(m=M_gigante, primary=sim.particles["Sol"],
+        a=4.865, e=0.721, inc=np.radians(0.5),
+        omega=np.radians(70.0), f=np.radians(-10.0), hash="Gigante")
+
+sim.move_to_com()
+
+# ── FUNÇÃO DE MATEMÁTICA PURA PARA ÓRBITA ─────────────────
+# Usamos matemática pura para evitar qualquer erro de versão do Rebound
+def calcular_elementos(p_alvo, p_centro):
+    G_nat = 4 * np.pi**2
+    mu = G_nat * (p_centro.m + p_alvo.m)
+
+    dx = p_alvo.x - p_centro.x; dy = p_alvo.y - p_centro.y; dz = p_alvo.z - p_centro.z
+    vx = p_alvo.vx - p_centro.vx; vy = p_alvo.vy - p_centro.vy; vz = p_alvo.vz - p_centro.vz
+
+    r = np.sqrt(dx**2 + dy**2 + dz**2)
+    v2 = vx**2 + vy**2 + vz**2
+
+    E = 0.5 * v2 - mu / r
+    a = -mu / (2 * E) if E != 0 else float('inf')
+
+    hx = dy*vz - dz*vy; hy = dz*vx - dx*vz; hz = dx*vy - dy*vx
+    h2 = hx**2 + hy**2 + hz**2
+
+    e = np.sqrt(max(0, 1 + 2 * E * h2 / (mu**2)))
+    return a, e, r
+
+# ── PARÂMETROS DE TEMPO E INTEGRAÇÃO ──────────────────────
+anos_totais = 500
+passos = 2500 # 5 passos por ano para ter um gráfico suave
+tempos = np.linspace(0, anos_totais, passos)
+
+t_hist = []
+e_gig_hist = []
+dist_jup_gig = []
+traj_x_gig = []; traj_y_gig = []
+traj_x_jup = []; traj_y_jup = []
+
+ejetado = False
+ano_ejeção = None
+
+print("  Acelerando o tempo... Isso pode levar de 5 a 15 segundos.")
+t_start = time.time()
+
+for t in tempos:
+    sim.integrate(t)
+    t_hist.append(t)
+
+    p_sol = sim.particles["Sol"]
+    p_jup = sim.particles["Jupiter"]
+    p_gig = sim.particles["Gigante"]
+
+    traj_x_gig.append(p_gig.x); traj_y_gig.append(p_gig.y)
+    traj_x_jup.append(p_jup.x); traj_y_jup.append(p_jup.y)
+
+    # Calcula distância entre Júpiter e Gigante
+    dx = p_gig.x - p_jup.x; dy = p_gig.y - p_jup.y; dz = p_gig.z - p_jup.z
+    dist_jg = np.sqrt(dx**2 + dy**2 + dz**2)
+    dist_jup_gig.append(dist_jg)
+
+    # Calcula Órbita do Gigante
+    a_g, e_g, r_g = calcular_elementos(p_gig, p_sol)
+    e_gig_hist.append(e_g)
+
+    # ALARME DE EJEÇÃO (Excentricidade >= 1.0 significa órbita aberta/fuga)
+    if e_g >= 1.0 and not ejetado:
+        ejetado = True
+        ano_ejeção = t
+        print(f"\n  🚨 ALERTA CRÍTICO: CATACLISMO JOVIANO DETECTADO! 🚨")
+        print(f"  Ano: {t:.1f} | Distância Júpiter-Gigante: {dist_jg:.3f} AU")
+        print(f"  Júpiter arremessou o Gigante para fora do Sistema Solar Interno!")
+        print(f"  Nova Excentricidade do Gigante: {e_g:.4f} (Rota de Fuga)")
+
+t_end = time.time()
+print(f"\n  Simulação concluída em {t_end - t_start:.1f} segundos.")
+
+# ── PLOTS ─────────────────────────────────────────────────
+fig = plt.figure(figsize=(18, 6))
+fig.patch.set_facecolor('#0a0a0a')
+
+# 1. VISÃO DO CAMPO DE BATALHA (Até 15 AU)
+ax1 = fig.add_subplot(131)
+ax1.set_facecolor('#0d1117')
+ax1.scatter(0, 0, color='#FFD700', s=100, label='Sol', zorder=5)
+ax1.plot(traj_x_jup, traj_y_jup, color='#E0A96D', alpha=0.8, lw=1.5, label='Júpiter')
+ax1.plot(traj_x_gig, traj_y_gig, color='#B39DDB', alpha=0.6, lw=1.0, label='Trajetória do Gigante')
+ax1.set_xlim(-12, 12); ax1.set_ylim(-12, 12)
+ax1.set_title('O Rastro do Caos (500 Anos)', color='white')
+ax1.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax1.tick_params(colors='white'); ax1.grid(True, alpha=0.1)
+
+# 2. DISTÂNCIA JÚPITER - GIGANTE
+ax2 = fig.add_subplot(132)
+ax2.set_facecolor('#0d1117')
+ax2.plot(t_hist, dist_jup_gig, color='#4FC3F7', lw=1.2)
+ax2.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='Zona de Perigo (< 0.5 AU)')
+ax2.set_title('Distância entre Júpiter e o Gigante (AU)', color='white')
+ax2.set_xlabel('Anos', color='white')
+ax2.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax2.tick_params(colors='white'); ax2.grid(True, alpha=0.1)
+
+# 3. O EXÍLIO (Excentricidade do Gigante)
+ax3 = fig.add_subplot(133)
+ax3.set_facecolor('#0d1117')
+ax3.plot(t_hist, e_gig_hist, color='#FF6B35', lw=2, label='Excentricidade (e)')
+ax3.axhline(y=1.0, color='red', linestyle='-', alpha=0.8, label='Limite de Ejeção (e=1.0)')
+ax3.set_title('A Sentença: Ejeção do Gigante', color='white')
+ax3.set_xlabel('Anos', color='white')
+if ano_ejeção:
+    ax3.axvline(x=ano_ejeção, color='white', linestyle=':', label=f'Expulso no ano {ano_ejeção:.1f}')
+ax3.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax3.tick_params(colors='white'); ax3.grid(True, alpha=0.1)
+
+plt.tight_layout()
+plt.savefig('5_O_Exilio_de_Jupiter.png', dpi=150, facecolor='#0a0a0a')
+plt.show()
+print("  Salvo: 5_O_Exilio_de_Jupiter.png")

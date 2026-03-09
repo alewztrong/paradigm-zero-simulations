@@ -1,0 +1,220 @@
+import rebound
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── CONSTANTES ────────────────────────────────────────────
+AU    = 1.496e11
+RE    = 6.371e6
+RE_AU = RE / AU
+
+M_sol_kg    = 1.989e30
+M_terra_kg  = 5.972e24
+M_agua_marte= 2.3e19
+M_marte_kg  = 6.417e23 + M_agua_marte
+M_lua_kg    = 7.342e22
+
+M_sol   = 1.0
+M_terra = M_terra_kg  / M_sol_kg
+M_marte = M_marte_kg  / M_sol_kg
+M_lua   = M_lua_kg    / M_sol_kg
+
+# 🌟 O GIGANTE (Calibrado - Coordenadas de Deus)
+M_gigante = 1.33e-04  # 44.2 Massas Terrestres
+a_gig = 4.865
+e_gig = 0.721   # Periélio de 1.357 AU (cruza Marte)
+inc_gig = np.radians(0.5)
+omega_gig = np.radians(70.0) # Ângulo do tiro
+f_gig = np.radians(-10.0)    # Relógio da colisão raspante
+
+print(f"{'═'*60}")
+print(f"  🚀 SIMULAÇÃO DEFINITIVA DO CATACLISMO (5 CORPOS)")
+print(f"  Alvo de Marte: ~1.524 AU")
+print(f"{'═'*60}")
+
+# ── PARÂMETROS ORBITAIS INICIAIS ──────────────────────────
+r_terra_0 = 0.990
+r_marte_0 = 1.3572
+ang_marte = np.radians(60)
+
+G_nat = 4 * np.pi**2
+
+def v_circ(r, m=1.0):
+    return np.sqrt(G_nat * m / r)
+
+v_terra   = v_circ(r_terra_0)
+v_marte   = v_circ(r_marte_0)
+
+# Lua chegando para captura
+r_lua_AU  = 80.0 * RE_AU
+v_lua_rel = v_circ(r_lua_AU, M_terra) * 0.85
+v_lua_abs = v_terra + v_lua_rel
+
+# ── SIMULAÇÃO REBOUND ─────────────────────────────────────
+sim = rebound.Simulation()
+sim.units = ('yr', 'AU', 'Msun')
+sim.integrator = 'ias15'
+sim.dt = 1.0 / (365.25 * 24)   # Passo de 1 hora
+
+sim.add(m=M_sol, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0) # Sol
+sim.add(m=M_terra, x=r_terra_0, y=0.0, z=0.0, vx=0.0, vy=v_terra, vz=0.0) # Terra
+sim.add(m=M_marte,
+        x=r_marte_0*np.cos(ang_marte), y=r_marte_0*np.sin(ang_marte), z=0.0,
+        vx=-v_marte*np.sin(ang_marte), vy= v_marte*np.cos(ang_marte), vz=0.0) # Marte
+sim.add(m=M_lua,
+        x=r_terra_0 + r_lua_AU, y=0.0, z=0.0,
+        vx=0.0, vy=v_lua_abs, vz=0.0) # Lua
+
+# O TIRO DO GIGANTE 🎯
+sim.add(m=M_gigante, primary=sim.particles[0],
+        a=a_gig, e=e_gig, inc=inc_gig,
+        omega=omega_gig, f=f_gig)
+
+sim.move_to_com()
+ps = sim.particles
+
+# ── PARÂMETROS DE INTEGRAÇÃO ──────────────────────────────
+t_total   = 5.0           # 5 anos
+dt_out    = 1.0 / 365.25  # Diário
+steps_out = int(t_total / dt_out)
+
+print(f"  Rodando {steps_out:,} passos diários...")
+
+# ── COLETA DE DADOS ───────────────────────────────────────
+traj = {i: {'x':[], 'y':[]} for i in range(5)}
+dist_marte_gigante = []
+a_marte_hist = []
+t_hist = []
+
+capturada = False
+t_captura = None
+
+for i_step in range(steps_out):
+    sim.integrate(sim.t + dt_out)
+    t_dias = sim.t * 365.25
+    t_hist.append(t_dias)
+
+    for k in range(5):
+        traj[k]['x'].append(ps[k].x)
+        traj[k]['y'].append(ps[k].y)
+
+    # Distância Marte - Gigante
+    dx_mg = ps[4].x - ps[2].x
+    dy_mg = ps[4].y - ps[2].y
+    d_mg = np.sqrt(dx_mg**2 + dy_mg**2)
+    dist_marte_gigante.append(d_mg)
+
+    # Distância Lua - Terra
+    dx_lt = ps[3].x - ps[1].x
+    dy_lt = ps[3].y - ps[1].y
+    d_lt_RE = np.sqrt(dx_lt**2 + dy_lt**2) / RE_AU
+
+    if d_lt_RE < 70 and not capturada:
+        capturada = True
+        t_captura = t_dias
+        print(f"\n  ✅ LUA CAPTURADA em t = {t_captura:.1f} dias! (Distância: {d_lt_RE:.1f} R⊕)")
+
+    # Cálculo manual da órbita de Marte a cada dia (Vis-Viva)
+    rx_m = ps[2].x - ps[0].x
+    ry_m = ps[2].y - ps[0].y
+    r_m  = np.sqrt(rx_m**2 + ry_m**2)
+    v_m  = np.sqrt(ps[2].vx**2 + ps[2].vy**2)
+    E_m  = 0.5 * v_m**2 - (G_nat * M_sol) / r_m
+    a_m  = -(G_nat * M_sol) / (2 * E_m)
+    a_marte_hist.append(a_m)
+
+# ── RESULTADOS FINAIS (Matemática Pura) ───────────────────
+print(f"\n{'═'*60}")
+print(f"  💥 RELATÓRIO PÓS-CATACLISMO (t = {t_total} anos)")
+print(f"{'═'*60}")
+print(f"  MARTE:")
+print(f"    a_inicial : {r_marte_0:.4f} AU")
+print(f"    a_final   : {a_m:.4f} AU  <-- O GRANDE SALTO!")
+print(f"  LUA:")
+print(f"    Dist final Terra-Lua: {d_lt_RE:.1f} R⊕")
+print(f"  GIGANTE:")
+print(f"    Dist mínima de Marte : {min(dist_marte_gigante):.4f} AU (Passou raspando!)")
+print(f"{'═'*60}")
+
+# ── PLOTS ─────────────────────────────────────────────────
+fig = plt.figure(figsize=(18, 6))
+fig.patch.set_facecolor('#0a0a0a')
+
+# 1. VISÃO DO SISTEMA SOLAR (TRAJETÓRIAS)
+ax1 = fig.add_subplot(131)
+ax1.set_facecolor('#0d1117')
+colors = ['#FFD700', '#4FC3F7', '#FF6B35', '#E0E0E0', '#B39DDB']
+labels = ['Sol', 'Terra', 'Marte', 'Lua', 'Gigante Intruso']
+
+for i in range(5):
+    ax1.plot(traj[i]['x'], traj[i]['y'], color=colors[i], alpha=0.8, lw=1.2, label=labels[i])
+    ax1.scatter(traj[i]['x'][-1], traj[i]['y'][-1], color=colors[i], s=40, zorder=5)
+
+ax1.set_xlim(-2, 2); ax1.set_ylim(-2, 2)
+ax1.set_title('A Dança da Destruição', color='white')
+ax1.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax1.tick_params(colors='white'); ax1.grid(True, alpha=0.1)
+
+# 2. ÓRBITA RELATIVA DA LUA
+ax2 = fig.add_subplot(132)
+ax2.set_facecolor('#0d1117')
+x_rel_lua = (np.array(traj[3]['x']) - np.array(traj[1]['x'])) / RE_AU
+y_rel_lua = (np.array(traj[3]['y']) - np.array(traj[1]['y'])) / RE_AU
+ax2.plot(x_rel_lua, y_rel_lua, color='#E0E0E0', alpha=0.8, lw=1)
+ax2.scatter(0, 0, color='#4FC3F7', s=100, label='Terra')
+ax2.scatter(x_rel_lua[-1], y_rel_lua[-1], color='red', s=50, label='Lua Final')
+ax2.set_title('Sistema Terra-Lua (Em R⊕)', color='white')
+ax2.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax2.tick_params(colors='white'); ax2.grid(True, alpha=0.1)
+
+# 3. O "CHUTE" EM MARTE (Evolução do Semi-eixo maior)
+ax3 = fig.add_subplot(133)
+ax3.set_facecolor('#0d1117')
+ax3.plot(t_hist, a_marte_hist, color='#FF6B35', lw=2, label='Semi-eixo Maior de Marte (a)')
+ax3.axhline(y=1.524, color='white', linestyle='--', alpha=0.5, label='Marte Atual (1.524 AU)')
+ax3.set_title('Transferência de Energia: O Chute', color='white')
+ax3.set_xlabel('Dias', color='white')
+ax3.legend(fontsize=8, facecolor='#1a1a2e', labelcolor='white')
+ax3.tick_params(colors='white'); ax3.grid(True, alpha=0.1)
+
+plt.tight_layout()
+plt.savefig('4_O_Cataclismo_Final.png', dpi=150, facecolor='#0a0a0a')
+plt.show()
+print("  Salvo: 4_O_Cataclismo_Final.png")
+
+
+
+
+# ── RASTREAMENTO DO GIGANTE APÓS O CATACLISMO (Matemática Pura) ──
+p_sol = sim.particles[0]
+p_gig = sim.particles[4]
+
+# Distância do Gigante ao Sol
+rx_g = p_gig.x - p_sol.x
+ry_g = p_gig.y - p_sol.y
+r_g  = np.sqrt(rx_g**2 + ry_g**2)
+
+# Velocidade do Gigante
+v_g  = np.sqrt(p_gig.vx**2 + p_gig.vy**2)
+
+# Energia Orbital Específica (E) e Momento Angular (h)
+G_nat = 4 * np.pi**2
+E_g  = 0.5 * v_g**2 - G_nat / r_g
+h_g  = rx_g * p_gig.vy - ry_g * p_gig.vx
+
+# Elementos Orbitais Finais
+a_g_final = -G_nat / (2 * E_g)
+e_g_final = np.sqrt(max(0, 1 + 2 * E_g * h_g**2 / G_nat**2))
+afelio_g  = a_g_final * (1 + e_g_final)
+periodo_g = np.sqrt(a_g_final**3)
+
+print(f"\n{'═'*60}")
+print(f"  🔭 VETOR DE FUGA DO GIGANTE DE GELO")
+print(f"{'═'*60}")
+print(f"  Após o choque com Marte, esta é a rota do Assassino:")
+print(f"  Semi-eixo Maior (a): {a_g_final:.4f} AU")
+print(f"  Excentricidade (e) : {e_g_final:.4f}")
+print(f"  Afério (Dist Máx)  : {afelio_g:.4f} AU")
+print(f"  Período Orbital    : {periodo_g:.2f} Anos")
+print(f"{'═'*60}")
+
+

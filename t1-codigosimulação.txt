@@ -1,0 +1,736 @@
+!pip -q install rebound reboundx numpy pandas matplotlib
+
+# ============================================================
+# SIMULACAO_T1_REBOUND.PY
+# Sistema Terra-Marte T-1 | Marte Fase 1
+# Engine: REBOUND (N-body) + Pandas + Matplotlib
+# ============================================================
+# Instalar antes:
+# !pip -q install rebound reboundx numpy pandas matplotlib
+# ============================================================
+
+import rebound
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+import warnings
+import time
+warnings.filterwarnings("ignore")
+
+# ============================================================
+# BLOCO 1 — PARÂMETROS FÍSICOS
+# ============================================================
+
+# Constantes
+G      = 6.674e-11       # m³ kg⁻¹ s⁻²
+M_SOL  = 1.989e30        # kg
+AU     = 1.496e11        # m (1 AU padrão para conversão)
+DIA    = 86400           # s
+
+# REBOUND usa unidades: AU, M_sol, anos
+# Fator de conversão
+AU_REB   = 1.0           # 1 AU em unidades REBOUND
+MSOL_REB = 1.0           # 1 M_sol em unidades REBOUND
+ANO_REB  = 1.0           # 1 ano em unidades REBOUND
+
+# Conversões para SI
+M_SOL_KG  = 1.989e30
+AU_M      = 1.496e11
+ANO_S     = 365.25 * DIA
+
+# ── TERRA ────────────────────────────────────────────────────
+M_TERRA_KG       = 5.972e24
+ANOMALIA_CRUSTAL = -6.8e19
+ANOMALIA_GELO    = -2.6e19
+R_TERRA_M        = 6.371e6
+PERIODO_TERRA_D  = 360.0          # dias em T-1
+A_TERRA_AU       = 0.9898         # semi-eixo T-1 em AU
+                                   # (360d via Kepler)
+M_OCEANO_100_KG  = 1.335e21
+CM_OCEANO_FATOR  = -2.0e4
+
+# ── MARTE FASE 1 ─────────────────────────────────────────────
+M_MARTE_KG         = 6.4171e23
+R_MARTE_M          = 3.3895e6
+CM_MARTE_DICOTOMIA = -3.6e4       # m (sul)
+LAT_OCEANO_MARTE   = 52.0         # graus norte
+
+MASSAS_AGUA_MARTE = {
+    "min": 2.3e19,
+    "med": 5.0e19,
+    "max": 3.0e20,
+}
+
+# ── GRADES DE ITERAÇÃO ────────────────────────────────────────
+OCEANOS_TERRA         = [0.50, 0.60, 0.70]
+EXCENTRICIDADES_TERRA = [0.00, 0.01, 0.05]
+MASSAS_AGUA_LIST      = list(MASSAS_AGUA_MARTE.values())
+
+# Faixas de ressonância (período Marte em dias)
+FAIXAS = {
+    "4:3": list(range(450, 511, 10)),
+    "3:2": list(range(510, 571, 10)),
+    "2:1": list(range(680, 761, 10)),
+    "3:1": list(range(1020, 1141, 15)),
+}
+
+CENTROS = {"4:3": 480, "3:2": 540, "2:1": 720, "3:1": 1080}
+
+# Tempo de integração REBOUND por cenário
+# (5 períodos de Marte para capturar estabilidade)
+N_PERIODOS_INTEGRACAO = 5
+
+
+# ============================================================
+# BLOCO 2 — FUNÇÕES DE FÍSICA ANALÍTICA
+# ============================================================
+
+def massa_terra_total(fracao_oceano):
+    """Massa total da Terra com oceano + anomalias"""
+    m_oc = M_OCEANO_100_KG * fracao_oceano
+    return M_TERRA_KG + ANOMALIA_CRUSTAL + ANOMALIA_GELO + m_oc
+
+
+def cm_terra(fracao_oceano):
+    """
+    Deslocamento do CM da Terra (metros).
+    Retorna dict com componentes e magnitude.
+    """
+    mt = massa_terra_total(fracao_oceano)
+    mo = M_OCEANO_100_KG * fracao_oceano
+
+    cm_z  = ((ANOMALIA_CRUSTAL / mt) * 1.5e4 +
+             (ANOMALIA_GELO    / mt) * (-R_TERRA_M) +
+             (mo / mt) * (CM_OCEANO_FATOR * fracao_oceano))
+    cm_x  = (ANOMALIA_CRUSTAL / mt) * 0.8e3
+    cm_y  = (ANOMALIA_CRUSTAL / mt) * 0.3e3
+    mag   = np.sqrt(cm_x**2 + cm_y**2 + cm_z**2)
+
+    return {"x": cm_x, "y": cm_y, "z": cm_z,
+            "mag": mag, "mt": mt, "mo": mo}
+
+
+def cm_marte(massa_agua):
+    """
+    CM de Marte Fase 1.
+    Dicotomia crustal + compensação pelo oceano norte.
+    """
+    mt        = M_MARTE_KG + massa_agua
+    z_oc      = R_MARTE_M * np.sin(np.radians(LAT_OCEANO_MARTE))
+    cm_z_oc   = (massa_agua / mt) * z_oc
+    cm_z_tot  = CM_MARTE_DICOTOMIA + cm_z_oc
+
+    return {"z_dic":  CM_MARTE_DICOTOMIA,
+            "z_oc":   cm_z_oc,
+            "z_tot":  cm_z_tot,
+            "mag":    abs(cm_z_tot),
+            "mt":     mt}
+
+
+def periodo_para_au(periodo_dias):
+    """
+    Semi-eixo em AU via 3ª Lei de Kepler
+    (Sol = 1 M_sol, período em anos).
+    """
+    periodo_anos = periodo_dias / 365.25
+    return periodo_anos ** (2/3)   # AU (M_sol = 1)
+
+
+def score_orbital(periodo_marte, faixa):
+    c   = CENTROS[faixa]
+    dev = abs(periodo_marte - c) / c
+    if   dev == 0:    return 1.00
+    elif dev <= 0.02: return 0.95
+    elif dev <= 0.05: return 0.85
+    elif dev <= 0.08: return 0.75
+    elif dev <= 0.10: return 0.65
+    else:             return 0.50
+
+
+def score_cm(mag_m):
+    km = mag_m / 1000
+    if   km < 1:  return 1.00
+    elif km < 5:  return 0.95
+    elif km < 10: return 0.88
+    elif km < 20: return 0.78
+    elif km < 30: return 0.65
+    elif km < 50: return 0.50
+    else:         return 0.30
+
+
+def score_fisico(fracao_oceano, excent, massa_agua):
+    s = 1.0
+    if excent >= 0.05:                              s -= 0.15
+    if fracao_oceano == 0.70 and excent == 0.05:    s -= 0.10
+    if massa_agua >= 3.0e20:                        s -= 0.08
+    if fracao_oceano == 0.60:                       s += 0.05
+    return max(0.0, min(1.0, s))
+
+
+def flag(s):
+    if   s >= 0.85: return "✅"
+    elif s >= 0.65: return "⚠️"
+    else:           return "❌"
+
+
+# ============================================================
+# BLOCO 3 — SIMULAÇÃO REBOUND POR CENÁRIO
+# ============================================================
+
+def simular_rebound(periodo_marte_d, excent_terra,
+                     fracao_oceano, massa_agua_marte):
+    """
+    Integra o sistema Sol-Terra-Marte com REBOUND.
+    Usa integrador IAS15 (alta precisão, adaptativo).
+
+    Retorna dict com:
+    - variação de semi-eixo de Marte (estabilidade)
+    - variação de excentricidade de Marte
+    - desvio do período final vs inicial
+    - score de estabilidade dinâmica (0-1)
+    """
+
+    # Massas em unidades REBOUND (fração de M_sol)
+    m_terra_msol = massa_terra_total(fracao_oceano) / M_SOL_KG
+    m_marte_msol = (M_MARTE_KG + massa_agua_marte) / M_SOL_KG
+
+    # Semi-eixos em AU
+    a_terra_au = A_TERRA_AU
+    a_marte_au = periodo_para_au(periodo_marte_d)
+
+    # Período de integração em anos
+    periodo_marte_anos = periodo_marte_d / 365.25
+    t_integ = N_PERIODOS_INTEGRACAO * periodo_marte_anos
+
+    try:
+        sim = rebound.Simulation()
+        sim.integrator = "ias15"     # Integrador de alta precisão
+        sim.G = 4 * np.pi**2         # G em unidades AU/M_sol/ano
+
+        # Adicionar Sol
+        sim.add(m=1.0)
+
+        # Adicionar Terra (T-1: período 360d)
+        sim.add(m=m_terra_msol,
+                a=a_terra_au,
+                e=excent_terra,
+                inc=0.0,
+                Omega=0.0,
+                omega=0.0,
+                f=0.0)
+
+        # Adicionar Marte Fase 1
+        sim.add(m=m_marte_msol,
+                a=a_marte_au,
+                e=0.02,           # excentricidade T-1 nominal
+                inc=np.radians(1.85),
+                Omega=0.0,
+                omega=0.0,
+                f=np.pi)          # Marte oposto à Terra (estável)
+
+        sim.move_to_com()          # Mover para CM do sistema
+
+        # Capturar estado inicial
+        marte_ini = sim.particles[2]
+        a0  = marte_ini.a
+        e0  = marte_ini.e
+        P0  = marte_ini.P * 365.25  # converter para dias
+
+        # Arrays para monitorar durante integração
+        a_vals = []
+        e_vals = []
+        n_steps = 50
+
+        for i in range(n_steps):
+            sim.integrate(t_integ * (i+1) / n_steps)
+            p = sim.particles[2]
+            a_vals.append(p.a)
+            e_vals.append(p.e)
+
+        # Estado final
+        marte_fin = sim.particles[2]
+        af  = marte_fin.a
+        ef  = marte_fin.e
+        Pf  = marte_fin.P * 365.25
+
+        # Métricas de estabilidade
+        var_a   = np.std(a_vals) / a0           # variação relativa a
+        var_e   = np.std(e_vals)                # variação absoluta e
+        desvio_P = abs(Pf - P0) / P0            # desvio período
+
+        # Score de estabilidade dinâmica
+        # Quanto menor a variação, mais estável
+        s_dyn = 1.0
+        if var_a   > 0.001:  s_dyn -= 0.20
+        if var_a   > 0.005:  s_dyn -= 0.20
+        if var_e   > 0.005:  s_dyn -= 0.15
+        if var_e   > 0.020:  s_dyn -= 0.15
+        if desvio_P > 0.01:  s_dyn -= 0.10
+        s_dyn = max(0.0, s_dyn)
+
+        return {
+            "a0_au":    a0,
+            "af_au":    af,
+            "e0":       e0,
+            "ef":       ef,
+            "P0_d":     P0,
+            "Pf_d":     Pf,
+            "var_a":    var_a,
+            "var_e":    var_e,
+            "desvio_P": desvio_P,
+            "s_dyn":    s_dyn,
+            "ok":       True,
+        }
+
+    except Exception as err:
+        return {
+            "a0_au": 0, "af_au": 0,
+            "e0": 0,    "ef": 0,
+            "P0_d": 0,  "Pf_d": 0,
+            "var_a": 1, "var_e": 1,
+            "desvio_P": 1,
+            "s_dyn": 0.0,
+            "ok": False,
+            "erro": str(err),
+        }
+
+
+# ============================================================
+# BLOCO 4 — LOOP PRINCIPAL 864 CENÁRIOS
+# ============================================================
+
+def rodar_simulacao():
+    """
+    Executa todos os 864 cenários.
+    Combina física analítica (CM, scores) +
+    integração numérica REBOUND (estabilidade dinâmica).
+    """
+    resultados = []
+    id_c = 0
+    total = sum(len(v) for v in FAIXAS.values()) \
+            * len(OCEANOS_TERRA) \
+            * len(EXCENTRICIDADES_TERRA) \
+            * len(MASSAS_AGUA_LIST)
+
+    print(f"\n  Iniciando {total} cenários...\n")
+    t_inicio = time.time()
+
+    for faixa, periodos in FAIXAS.items():
+        for pm in periodos:
+            for oc in OCEANOS_TERRA:
+                for ex in EXCENTRICIDADES_TERRA:
+                    for ma in MASSAS_AGUA_LIST:
+
+                        id_c += 1
+
+                        # Progresso a cada 100 cenários
+                        if id_c % 100 == 0:
+                            pct = id_c / total * 100
+                            el  = time.time() - t_inicio
+                            print(f"  [{id_c:>4}/{total}] "
+                                  f"{pct:5.1f}%  "
+                                  f"{el:.1f}s")
+
+                        # ── FÍSICA ANALÍTICA ──────────────
+                        cmt  = cm_terra(oc)
+                        cmm  = cm_marte(ma)
+                        a_m  = periodo_para_au(pm)
+
+                        s_orb = score_orbital(pm, faixa)
+                        s_cmt = score_cm(cmt["mag"])
+                        s_fis = score_fisico(oc, ex, ma)
+
+                        # ── REBOUND ───────────────────────
+                        reb = simular_rebound(pm, ex, oc, ma)
+                        s_dyn = reb["s_dyn"]
+
+                        # ── SCORE FINAL ───────────────────
+                        # Orbital: 25% | CM: 25% |
+                        # Dinâmico: 35% | Físico: 15%
+                        s_fin = (0.25 * s_orb  +
+                                 0.25 * s_cmt  +
+                                 0.35 * s_dyn  +
+                                 0.15 * s_fis)
+
+                        resultados.append({
+                            # Identificação
+                            "id":           id_c,
+                            "faixa":        faixa,
+                            "periodo_d":    pm,
+                            "oceano":       oc,
+                            "excent":       ex,
+                            "agua_marte":   ma,
+
+                            # CM Terra
+                            "cm_terra_mag": cmt["mag"],
+                            "cm_terra_z":   cmt["z"],
+                            "m_terra":      cmt["mt"],
+
+                            # CM Marte
+                            "cm_marte_z":   cmm["z_tot"],
+                            "cm_marte_mag": cmm["mag"],
+                            "m_marte":      cmm["mt"],
+
+                            # Orbital analítico
+                            "a_marte_au":   a_m,
+                            "razao_P":      pm / PERIODO_TERRA_D,
+
+                            # REBOUND
+                            "a0_au":        reb["a0_au"],
+                            "af_au":        reb["af_au"],
+                            "e0":           reb["e0"],
+                            "ef":           reb["ef"],
+                            "P0_d":         reb["P0_d"],
+                            "Pf_d":         reb["Pf_d"],
+                            "var_a":        reb["var_a"],
+                            "var_e":        reb["var_e"],
+                            "desvio_P":     reb["desvio_P"],
+                            "reb_ok":       reb["ok"],
+
+                            # Scores
+                            "s_orbital":    s_orb,
+                            "s_cm":         s_cmt,
+                            "s_dinamico":   s_dyn,
+                            "s_fisico":     s_fis,
+                            "score_final":  s_fin,
+
+                            # Flags
+                            "fl_orb":  flag(s_orb),
+                            "fl_cm":   flag(s_cmt),
+                            "fl_dyn":  flag(s_dyn),
+                            "fl_fis":  flag(s_fis),
+                        })
+
+    t_total = time.time() - t_inicio
+    print(f"\n  ✅ Concluído: {id_c} cenários em {t_total:.1f}s\n")
+    return resultados
+
+
+# ============================================================
+# BLOCO 5 — RELATÓRIO PANDAS
+# ============================================================
+
+def gerar_relatorio(df):
+    """Imprime relatório formatado usando Pandas DataFrame."""
+
+    SEP  = "=" * 75
+    SEP2 = "-" * 75
+
+    print(f"\n{SEP}")
+    print("  SISTEMA TERRA-MARTE T-1 | MARTE FASE 1")
+    print(f"  {len(df)} cenários | 4 faixas | REBOUND IAS15")
+    print(SEP)
+
+    # ── TOP 10 ──────────────────────────────────────────────
+    print("\n📊  TOP 10 CENÁRIOS\n")
+    top10 = df.nlargest(10, "score_final")[[
+        "id","faixa","periodo_d","oceano","excent",
+        "agua_marte","s_orbital","s_cm","s_dinamico",
+        "score_final","fl_orb","fl_cm","fl_dyn"
+    ]].copy()
+    top10["oceano"]     = (top10["oceano"]*100).astype(int).astype(str)+"%"
+    top10["agua_marte"] = top10["agua_marte"].apply(lambda x: f"{x:.1e}")
+    top10["score_final"]= top10["score_final"].round(4)
+    print(top10.to_string(index=False))
+
+    # ── MELHOR CENÁRIO ───────────────────────────────────────
+    melhor = df.loc[df["score_final"].idxmax()]
+    print(f"\n{SEP}")
+    print("  🏆  MELHOR CENÁRIO — DETALHADO")
+    print(SEP)
+    campos = [
+        ("ID",               melhor["id"]),
+        ("Faixa",            melhor["faixa"]),
+        ("Período Marte",    f"{melhor['periodo_d']} dias"),
+        ("Oceano Terra",     f"{melhor['oceano']*100:.0f}%"),
+        ("Excentricidade",   f"{melhor['excent']:.3f}"),
+        ("Água Marte",       f"{melhor['agua_marte']:.2e} kg"),
+        ("──────────────────────────", ""),
+        ("Massa Terra",      f"{melhor['m_terra']:.4e} kg"),
+        ("CM Terra (mag)",   f"{melhor['cm_terra_mag']/1000:.3f} km"),
+        ("CM Terra z",       f"{melhor['cm_terra_z']/1000:.3f} km"),
+        ("CM Marte z",       f"{melhor['cm_marte_z']/1000:.3f} km"),
+        ("Semi-eixo Marte",  f"{melhor['a_marte_au']:.4f} AU"),
+        ("Semi-eixo (REB)",  f"{melhor['a0_au']:.4f} AU"),
+        ("Razão períodos",   f"{melhor['razao_P']:.4f}"),
+        ("──────────────────────────", ""),
+        ("var_a (estab.)",   f"{melhor['var_a']:.6f}"),
+        ("var_e (estab.)",   f"{melhor['var_e']:.6f}"),
+        ("desvio P",         f"{melhor['desvio_P']:.6f}"),
+        ("──────────────────────────", ""),
+        ("Score orbital",    f"{melhor['s_orbital']:.3f}  {melhor['fl_orb']}"),
+        ("Score CM",         f"{melhor['s_cm']:.3f}  {melhor['fl_cm']}"),
+        ("Score dinâmico",   f"{melhor['s_dinamico']:.3f}  {melhor['fl_dyn']}"),
+        ("Score físico",     f"{melhor['s_fisico']:.3f}  {melhor['fl_fis']}"),
+        ("── SCORE FINAL ──",f"{melhor['score_final']:.4f} ⭐"),
+    ]
+    for k, v in campos:
+        if "──" in k:
+            print(f"  {k}")
+        else:
+            print(f"  {k:<28}: {v}")
+
+    # ── SCORE MÉDIO POR FAIXA ────────────────────────────────
+    print(f"\n{SEP}")
+    print("  📈  SCORE MÉDIO POR FAIXA")
+    print(SEP)
+    medias = df.groupby("faixa")["score_final"].agg(
+        ["mean","max","min","std"]).sort_values("mean", ascending=False)
+    medias.columns = ["Média","Máx","Mín","Std"]
+    print(medias.round(4).to_string())
+    fv = medias["Média"].idxmax()
+    print(f"\n  🥇 FAIXA VENCEDORA: {fv}  "
+          f"(média={medias.loc[fv,'Média']:.4f})")
+
+    # ── MELHOR POR FAIXA ─────────────────────────────────────
+    print(f"\n{SEP}")
+    print("  🔬  MELHOR CENÁRIO POR FAIXA")
+    print(SEP)
+    for faixa in sorted(df["faixa"].unique()):
+        r = df[df["faixa"]==faixa].loc[
+            df[df["faixa"]==faixa]["score_final"].idxmax()]
+        print(f"  {faixa:>4}  P={r['periodo_d']:>5}d  "
+              f"Oc={r['oceano']*100:.0f}%  "
+              f"e={r['excent']:.2f}  "
+              f"H2O={r['agua_marte']:.1e}  "
+              f"→ Score={r['score_final']:.4f}  "
+              f"{r['fl_orb']}{r['fl_cm']}{r['fl_dyn']}")
+
+    # ── SENSIBILIDADE ────────────────────────────────────────
+    print(f"\n{SEP}")
+    print("  🎛️   SENSIBILIDADE (|correlação| com score final)")
+    print(SEP)
+    nomes = {"oceano":      "Oceano Terra    ",
+             "excent":      "Excentricidade  ",
+             "agua_marte":  "Água Marte      ",
+             "periodo_d":   "Período Marte   "}
+    for var, nome in nomes.items():
+        corr = abs(df[var].corr(df["score_final"]))
+        barra = "█" * int(corr * 40)
+        print(f"  {nome}  {corr:.4f}   {barra}")
+
+    # ── PIORES 10 ────────────────────────────────────────────
+    print(f"\n{SEP}")
+    print("  ⚠️   PIORES 10 CENÁRIOS")
+    print(SEP)
+    piores = df.nsmallest(10, "score_final")[[
+        "id","faixa","periodo_d","oceano",
+        "excent","score_final","fl_orb","fl_cm","fl_dyn"
+    ]].copy()
+    piores["oceano"] = (piores["oceano"]*100).astype(int).astype(str)+"%"
+    print(piores.to_string(index=False))
+    print(f"\n{SEP}\n")
+
+
+# ============================================================
+# BLOCO 6 — GRÁFICOS MATPLOTLIB
+# ============================================================
+
+def gerar_graficos(df):
+    """
+    Gera painel completo com 6 gráficos:
+    1. Heatmap: Score por faixa × oceano Terra
+    2. Boxplot: Distribuição de scores por faixa
+    3. Scatter: Score dinâmico vs Score orbital
+    4. Barras:  Score médio por faixa
+    5. Scatter: var_a vs Score final (estabilidade REBOUND)
+    6. Heatmap: Score final por excentricidade × água Marte
+    """
+
+    fig = plt.figure(figsize=(18, 14))
+    fig.patch.set_facecolor("#0d0d1a")
+    gs  = gridspec.GridSpec(3, 3, figure=fig,
+                            hspace=0.45, wspace=0.35)
+
+    COR_FUNDO  = "#0d0d1a"
+    COR_TEXTO  = "#e0e0ff"
+    COR_GRADE  = "#2a2a4a"
+    CMAP_MAIN  = "plasma"
+    CMAP_SEC   = "viridis"
+
+    def estilo_ax(ax, titulo):
+        ax.set_facecolor("#12122a")
+        ax.set_title(titulo, color=COR_TEXTO,
+                     fontsize=10, fontweight="bold", pad=8)
+        ax.tick_params(colors=COR_TEXTO, labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color(COR_GRADE)
+        ax.xaxis.label.set_color(COR_TEXTO)
+        ax.yaxis.label.set_color(COR_TEXTO)
+
+    # ── GRÁFICO 1: Heatmap Faixa × Oceano ───────────────────
+    ax1 = fig.add_subplot(gs[0, 0])
+    pivot1 = df.pivot_table(values="score_final",
+                             index="faixa",
+                             columns="oceano",
+                             aggfunc="mean")
+    pivot1.columns = [f"{int(c*100)}%" for c in pivot1.columns]
+    im1 = ax1.imshow(pivot1.values, cmap=CMAP_MAIN,
+                     aspect="auto", vmin=0.5, vmax=1.0)
+    ax1.set_xticks(range(len(pivot1.columns)))
+    ax1.set_xticklabels(pivot1.columns)
+    ax1.set_yticks(range(len(pivot1.index)))
+    ax1.set_yticklabels(pivot1.index)
+    for i in range(len(pivot1.index)):
+        for j in range(len(pivot1.columns)):
+            ax1.text(j, i, f"{pivot1.values[i,j]:.3f}",
+                     ha="center", va="center",
+                     color="white", fontsize=8, fontweight="bold")
+    plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+    estilo_ax(ax1, "① Score Médio: Faixa × Oceano Terra")
+    ax1.set_xlabel("Oceano Terra")
+    ax1.set_ylabel("Faixa Ressonância")
+
+    # ── GRÁFICO 2: Boxplot por Faixa ─────────────────────────
+    ax2 = fig.add_subplot(gs[0, 1])
+    faixas_order = ["4:3","3:2","2:1","3:1"]
+    dados_box = [df[df["faixa"]==f]["score_final"].values
+                 for f in faixas_order]
+    bp = ax2.boxplot(dados_box, labels=faixas_order,
+                     patch_artist=True,
+                     medianprops=dict(color="yellow", linewidth=2))
+    cores_box = ["#ff6b6b","#4ecdc4","#45b7d1","#f9ca24"]
+    for patch, cor in zip(bp["boxes"], cores_box):
+        patch.set_facecolor(cor)
+        patch.set_alpha(0.7)
+    estilo_ax(ax2, "② Distribuição Scores por Faixa")
+    ax2.set_xlabel("Faixa")
+    ax2.set_ylabel("Score Final")
+    ax2.grid(axis="y", color=COR_GRADE, alpha=0.5)
+
+    # ── GRÁFICO 3: Scatter Dinâmico vs Orbital ───────────────
+    ax3 = fig.add_subplot(gs[0, 2])
+    sc3 = ax3.scatter(df["s_orbital"], df["s_dinamico"],
+                      c=df["score_final"], cmap=CMAP_MAIN,
+                      alpha=0.5, s=15, vmin=0.5, vmax=1.0)
+    plt.colorbar(sc3, ax=ax3, fraction=0.046, pad=0.04,
+                 label="Score Final")
+    estilo_ax(ax3, "③ Score Dinâmico vs Score Orbital")
+    ax3.set_xlabel("Score Orbital")
+    ax3.set_ylabel("Score Dinâmico (REBOUND)")
+    ax3.grid(color=COR_GRADE, alpha=0.3)
+
+    # ── GRÁFICO 4: Barras Score Médio por Faixa ──────────────
+    ax4 = fig.add_subplot(gs[1, 0])
+    medias_f = df.groupby("faixa")["score_final"].mean()
+    medias_f = medias_f.reindex(faixas_order)
+    bars = ax4.bar(medias_f.index, medias_f.values,
+                   color=cores_box, alpha=0.85, edgecolor="white",
+                   linewidth=0.5)
+    for bar, val in zip(bars, medias_f.values):
+        ax4.text(bar.get_x() + bar.get_width()/2,
+                 bar.get_height() + 0.002,
+                 f"{val:.4f}", ha="center", va="bottom",
+                 color=COR_TEXTO, fontsize=8, fontweight="bold")
+    ax4.set_ylim(0, 1.05)
+    estilo_ax(ax4, "④ Score Médio por Faixa")
+    ax4.set_xlabel("Faixa de Ressonância")
+    ax4.set_ylabel("Score Médio")
+    ax4.grid(axis="y", color=COR_GRADE, alpha=0.5)
+
+    # ── GRÁFICO 5: Estabilidade REBOUND (var_a) ──────────────
+    ax5 = fig.add_subplot(gs[1, 1])
+    sc5 = ax5.scatter(df["var_a"] * 1000,
+                      df["score_final"],
+                      c=df["s_dinamico"], cmap=CMAP_SEC,
+                      alpha=0.4, s=12)
+    plt.colorbar(sc5, ax=ax5, fraction=0.046, pad=0.04,
+                 label="Score Dinâmico")
+    estilo_ax(ax5, "⑤ Estabilidade REBOUND (var_a × Score)")
+    ax5.set_xlabel("Variação Semi-eixo Marte (×10⁻³)")
+    ax5.set_ylabel("Score Final")
+    ax5.grid(color=COR_GRADE, alpha=0.3)
+
+    # ── GRÁFICO 6: Heatmap Excent × Água Marte ───────────────
+    ax6 = fig.add_subplot(gs[1, 2])
+    pivot2 = df.pivot_table(values="score_final",
+                             index="excent",
+                             columns="agua_marte",
+                             aggfunc="mean")
+    pivot2.columns = [f"{c:.0e}" for c in pivot2.columns]
+    im6 = ax6.imshow(pivot2.values, cmap=CMAP_MAIN,
+                     aspect="auto", vmin=0.5, vmax=1.0)
+    ax6.set_xticks(range(len(pivot2.columns)))
+    ax6.set_xticklabels(pivot2.columns, rotation=15, fontsize=7)
+    ax6.set_yticks(range(len(pivot2.index)))
+    ax6.set_yticklabels([f"{e:.2f}" for e in pivot2.index])
+    for i in range(len(pivot2.index)):
+        for j in range(len(pivot2.columns)):
+            ax6.text(j, i, f"{pivot2.values[i,j]:.3f}",
+                     ha="center", va="center",
+                     color="white", fontsize=8, fontweight="bold")
+    plt.colorbar(im6, ax=ax6, fraction=0.046, pad=0.04)
+    estilo_ax(ax6, "⑥ Score: Excentricidade × Água Marte")
+    ax6.set_xlabel("Massa Água Marte (kg)")
+    ax6.set_ylabel("Excentricidade Terra")
+
+    # ── GRÁFICO 7: Score por Período Marte (linha) ───────────
+    ax7 = fig.add_subplot(gs[2, :])
+    cores_faixa = {"4:3":"#ff6b6b","3:2":"#4ecdc4",
+                   "2:1":"#45b7d1","3:1":"#f9ca24"}
+    for faixa in faixas_order:
+        sub = df[df["faixa"]==faixa].groupby(
+            "periodo_d")["score_final"].mean().reset_index()
+        ax7.plot(sub["periodo_d"], sub["score_final"],
+                 "o-", color=cores_faixa[faixa],
+                 label=f"Ressonância {faixa}",
+                 linewidth=2, markersize=6, alpha=0.9)
+        # Linha vertical no centro da ressonância
+        ax7.axvline(CENTROS[faixa], color=cores_faixa[faixa],
+                    linestyle="--", alpha=0.3, linewidth=1)
+
+    ax7.set_ylim(0, 1.05)
+    ax7.legend(facecolor="#12122a", labelcolor=COR_TEXTO,
+               fontsize=9, loc="upper right")
+    estilo_ax(ax7, "⑦ Score Médio por Período de Marte "
+                    "(linhas verticais = centros das ressonâncias)")
+    ax7.set_xlabel("Período Marte (dias)")
+    ax7.set_ylabel("Score Médio")
+    ax7.grid(color=COR_GRADE, alpha=0.3)
+
+    # ── TÍTULO GERAL ─────────────────────────────────────────
+    fig.suptitle(
+        "SISTEMA TERRA–MARTE  T-1  |  Marte Fase 1  |  "
+        "864 Cenários  |  REBOUND IAS15",
+        color=COR_TEXTO, fontsize=13, fontweight="bold", y=0.98
+    )
+
+    plt.savefig("simulacao_t1_graficos.png",
+                dpi=150, bbox_inches="tight",
+                facecolor=COR_FUNDO)
+    print("  📊 Gráficos salvos → simulacao_t1_graficos.png")
+    plt.show()
+
+
+# ============================================================
+# BLOCO 7 — EXECUÇÃO PRINCIPAL
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("\n" + "="*75)
+    print("  SISTEMA TERRA-MARTE T-1  |  REBOUND + PANDAS + MATPLOTLIB")
+    print("  Marte Fase 1  |  864 cenários  |  Integrador IAS15")
+    print("="*75)
+
+    # 1. Rodar simulação
+    resultados = rodar_simulacao()
+
+    # 2. Converter para DataFrame Pandas
+    df = pd.DataFrame(resultados)
+    df = df.sort_values("score_final", ascending=False).reset_index(drop=True)
+
+    # 3. Relatório no terminal
+    gerar_relatorio(df)
+
+    # 4. Exportar CSV
+    df.to_csv("resultados_t1.csv", index=False, encoding="utf-8")
+    print("  💾 CSV exportado → resultados_t1.csv\n")
+
+    # 5. Gráficos
+    gerar_graficos(df)
+
+    print("  🚀 Simulação completa!\n")
