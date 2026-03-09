@@ -1,0 +1,231 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── CONSTANTES ──────────────────────────────────────────
+G_nat  = 4 * np.pi**2
+AU     = 1.496e11
+RE     = 6.371e6
+RE_AU  = RE / AU
+
+M_sol   = 1.0
+M_terra = 5.972e24 / 1.989e30
+M_agua_marte = 2.3e19                           # ← corrigido
+M_marte = (6.417e23 + M_agua_marte) / 1.989e30  # ← corrigido
+M_lua   = 7.342e22 / 1.989e30
+
+masses = np.array([M_sol, M_terra, M_marte, M_lua])
+N = 4
+
+# ── PARÂMETROS FIXOS ────────────────────────────────────
+r_terra_0  = 0.990
+r_marte_0  = 1.3572          # ← corrigido
+ang_marte  = np.radians(60)
+
+def v_circ(r, m=1.0):
+    return np.sqrt(G_nat * m / r)
+
+v_terra = v_circ(r_terra_0)
+v_marte = v_circ(r_marte_0)
+
+pos_sol   = np.array([0.0, 0.0])
+vel_sol   = np.array([0.0, 0.0])
+pos_terra = np.array([r_terra_0, 0.0])
+vel_terra = np.array([0.0, v_terra])
+pos_marte = np.array([r_marte_0 * np.cos(ang_marte),
+                      r_marte_0 * np.sin(ang_marte)])
+vel_marte = np.array([-v_marte * np.sin(ang_marte),
+                       v_marte * np.cos(ang_marte)])
+
+# ── N-CORPOS ─────────────────────────────────────────────
+def derivs(state):
+    pos = state[:2*N].reshape(N, 2)
+    vel = state[2*N:].reshape(N, 2)
+    acc = np.zeros((N, 2))
+    soft = 1e-9
+    for i in range(1, N):
+        for j in range(N):
+            if i == j: continue
+            dr   = pos[j] - pos[i]
+            dist = np.sqrt(np.dot(dr, dr) + soft**2)
+            acc[i] += G_nat * masses[j] / dist**3 * dr
+    acc[0] = np.array([0.0, 0.0])
+    return np.concatenate([vel.flatten(), acc.flatten()])
+
+def rk4_step(state, dt):
+    k1 = derivs(state)
+    k2 = derivs(state + dt/2 * k1)
+    k3 = derivs(state + dt/2 * k2)
+    k4 = derivs(state + dt   * k3)
+    return state + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+
+def build_state(theta_deg, v_inf_frac, r_entrada_RE=150):
+    theta     = np.radians(theta_deg)
+    r_lua_AU  = r_entrada_RE * RE_AU
+    pos_lua   = pos_terra + np.array([np.cos(theta),
+                                      np.sin(theta)]) * r_lua_AU
+    v_circ_lua = v_circ(r_lua_AU, M_terra)
+    v_inf      = v_inf_frac * v_circ_lua
+    tang       = np.array([-np.sin(theta),  np.cos(theta)])
+    radial     = -np.array([ np.cos(theta), np.sin(theta)])
+    v_rel      = tang * v_circ_lua * 0.85 + radial * v_inf
+    vel_lua    = vel_terra + v_rel
+    pos0 = np.concatenate([pos_sol, pos_terra, pos_marte, pos_lua])
+    vel0 = np.concatenate([vel_sol, vel_terra, vel_marte, vel_lua])
+    return np.concatenate([pos0, vel0])
+
+def simula(theta_deg, v_inf_frac, r_entrada_RE=150,
+           t_max_dias=180, dt_horas=1.0):
+    dt      = (dt_horas / 24.0) / 365.25
+    n_steps = int((t_max_dias / 365.25) / dt)
+    state   = build_state(theta_deg, v_inf_frac, r_entrada_RE)
+    t_cap   = None
+    capturada = False
+    for step in range(n_steps):
+        state = rk4_step(state, dt)
+        pos   = state[:2*N].reshape(N, 2)
+        d_RE  = np.linalg.norm(pos[3]-pos[1]) * AU / RE
+        if d_RE > r_entrada_RE * 2: break
+        if d_RE < 100 and not capturada:
+            E = sum(
+                0.5 * masses[i] * np.dot(
+                    state[2*N:].reshape(N,2)[i],
+                    state[2*N:].reshape(N,2)[i])
+                for i in range(N)
+            ) - sum(
+                G_nat * masses[i] * masses[j] /
+                np.linalg.norm(pos[i]-pos[j])
+                for i in range(N) for j in range(i+1,N)
+            )
+            if E < 0:
+                t_cap     = step * dt * 365.25
+                capturada = True
+    pos    = state[:2*N].reshape(N, 2)
+    r_fin  = np.linalg.norm(pos[3]-pos[1]) * AU / RE
+    return r_fin, t_cap, capturada
+
+# ── ZONAS ────────────────────────────────────────────────
+zonas = [
+    {
+        'nome'   : 'ZONA 1 — θ≈135°',
+        'cor'    : '#4FC3F7',
+        'thetas' : np.arange(120, 151, 1),
+        'vinfs'  : np.arange(0.00, 0.11, 0.01),
+    },
+    {
+        'nome'   : 'ZONA 2 — θ≈300°',
+        'cor'    : '#FF6B35',
+        'thetas' : np.arange(285, 316, 1),
+        'vinfs'  : np.arange(0.14, 0.29, 0.01),
+    },
+]
+
+TARGET     = 60.27
+TOLERANCIA = 5.0
+
+print(f"{'═'*60}")
+print(f"  2_refinamento_zonas.py")
+print(f"  REFINAMENTO — SCAN FINO")
+print(f"  critério: r_final = {TARGET} ± {TOLERANCIA} R⊕")
+print(f"{'═'*60}\n")
+
+resultados = {z['nome']: [] for z in zonas}
+
+for zona in zonas:
+    total = len(zona['thetas']) * len(zona['vinfs'])
+    print(f"  {zona['nome']}  ({total} cenários)")
+    print(f"  {'─'*50}")
+    for v_frac in zona['vinfs']:
+        for theta in zona['thetas']:
+            r_fin, t_cap, cap = simula(theta, v_frac)
+            erro = abs(r_fin - TARGET)
+            resultados[zona['nome']].append({
+                'theta'  : theta,
+                'v_inf'  : v_frac,
+                'r_fin'  : r_fin,
+                't_cap'  : t_cap,
+                'cap'    : cap,
+                'erro'   : erro,
+            })
+            if cap and erro < TOLERANCIA:
+                print(f"  ✅  θ={theta:6.1f}°"
+                      f"  v_inf={v_frac:.2f}"
+                      f"  r_fin={r_fin:6.2f} R⊕"
+                      f"  erro={erro:5.2f} R⊕"
+                      f"  t={t_cap:.1f} dias")
+    print()
+
+print(f"{'═'*60}")
+print(f"  MELHORES RESULTADOS")
+print(f"{'═'*60}")
+
+melhores = {}
+for zona in zonas:
+    nome = zona['nome']
+    hits = [r for r in resultados[nome] if r['cap']]
+    if hits:
+        best = min(hits, key=lambda x: x['erro'])
+        melhores[nome] = best
+        print(f"\n  {nome}")
+        print(f"  θ       = {best['theta']:.1f}°")
+        print(f"  v_inf   = {best['v_inf']:.3f} × v_circ")
+        print(f"  r_final = {best['r_fin']:.3f} R⊕")
+        print(f"  erro    = {best['erro']:.3f} R⊕")
+        print(f"  t_cap   = {best['t_cap']:.1f} dias")
+
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+fig.patch.set_facecolor('#0a0a0a')
+fig.suptitle('2_refinamento_zonas — SCAN FINO DE CAPTURA LUNAR',
+             color='white', fontsize=14, y=0.98)
+
+for idx, zona in enumerate(zonas):
+    nome = zona['nome']; cor = zona['cor']; data = resultados[nome]
+    thetas_u = sorted(set(r['theta'] for r in data))
+    vinfs_u  = sorted(set(r['v_inf'] for r in data))
+    Z = np.zeros((len(vinfs_u), len(thetas_u)))
+    for r in data:
+        i = vinfs_u.index(r['v_inf'])
+        j = thetas_u.index(r['theta'])
+        Z[i, j] = r['r_fin']
+    ax = axes[idx][0]; ax.set_facecolor('#0d1117')
+    im = ax.imshow(Z, origin='lower', aspect='auto',
+                   extent=[thetas_u[0], thetas_u[-1],
+                           vinfs_u[0],  vinfs_u[-1]],
+                   cmap='plasma', vmin=40, vmax=120)
+    ax.axhline(melhores[nome]['v_inf'] if nome in melhores else 0,
+               color='white', lw=1, ls='--', alpha=0.6)
+    ax.axvline(melhores[nome]['theta'] if nome in melhores else 0,
+               color='white', lw=1, ls='--', alpha=0.6)
+    cb = plt.colorbar(im, ax=ax)
+    cb.set_label('r_final (R⊕)', color='white')
+    cb.ax.yaxis.set_tick_params(color='white')
+    plt.setp(cb.ax.yaxis.get_ticklabels(), color='white')
+    ax.set_title(f'{nome} — Mapa r_final', color='white', fontsize=11)
+    ax.set_xlabel('θ entrada (°)', color='white')
+    ax.set_ylabel('v_inf / v_circ', color='white')
+    ax.tick_params(colors='white')
+    ax2 = axes[idx][1]; ax2.set_facecolor('#0d1117')
+    hits  = [r for r in data if r['cap'] and abs(r['r_fin']-TARGET) < TOLERANCIA]
+    todos = [r for r in data if r['cap']]
+    if todos:
+        ax2.scatter([r['theta'] for r in todos],
+                    [r['r_fin'] for r in todos],
+                    c='#444', s=20, label='capturados', zorder=3)
+    if hits:
+        ax2.scatter([r['theta'] for r in hits],
+                    [r['r_fin'] for r in hits],
+                    c=cor, s=80, label=f'± {TOLERANCIA} R⊕', zorder=5)
+    ax2.axhline(TARGET,              color='white', lw=1.5, ls='-',  alpha=0.9, label=f'Alvo {TARGET}')
+    ax2.axhline(TARGET + TOLERANCIA, color='white', lw=0.8, ls='--', alpha=0.4)
+    ax2.axhline(TARGET - TOLERANCIA, color='white', lw=0.8, ls='--', alpha=0.4)
+    ax2.set_title(f'{nome} — Hits', color='white', fontsize=11)
+    ax2.set_xlabel('θ entrada (°)',  color='white')
+    ax2.set_ylabel('r_final (R⊕)',   color='white')
+    ax2.tick_params(colors='white')
+    ax2.legend(fontsize=9, facecolor='#1a1a2e', edgecolor='white', labelcolor='white')
+    ax2.grid(True, alpha=0.15)
+
+plt.tight_layout()
+plt.savefig('2_refinamento_zonas.png', dpi=150,
+            bbox_inches='tight', facecolor='#0a0a0a')
+plt.show()
+print("\nSalvo: 2_refinamento_zonas.png ✅")

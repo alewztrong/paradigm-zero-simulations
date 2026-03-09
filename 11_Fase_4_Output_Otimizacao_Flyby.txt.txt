@@ -1,0 +1,69 @@
+⚠️  Aviso: Não rodando no Colab ou Drive não montado. Salvando localmente.
+
+============================================================
+🚀 INICIANDO V3 PLUS: BUSCA PELO GIGANTE DE GELO
+============================================================
+▶️ Iniciando uma busca do zero Absoluto...
+/usr/local/lib/python3.12/dist-packages/scipy/optimize/_differentialevolution.py:487: UserWarning: differential_evolution: the 'workers' keyword has overridden updating='immediate' to updating='deferred'
+  with DifferentialEvolutionSolver(func, bounds, args=args,
+
+🎯 [BOOOM!] NOVO RECORDE — Geração 1
+   Delta a (Erro) : 0.11365405 AU
+   Massa Intruso  : 1.07e-04 Msun (~35.8 Massas Terrestres)
+   Órbita Intruso : a=6.085 AU, e=0.757, inc=0.3°
+
+🎯 [BOOOM!] NOVO RECORDE — Geração 2
+   Delta a (Erro) : 0.02240280 AU
+   Massa Intruso  : 1.09e-04 Msun (~36.3 Massas Terrestres)
+   Órbita Intruso : a=5.894 AU, e=0.806, inc=9.6°
+
+🎯 [BOOOM!] NOVO RECORDE — Geração 9
+   Delta a (Erro) : 0.01893115 AU
+   Massa Intruso  : 1.26e-04 Msun (~42.0 Massas Terrestres)
+   Órbita Intruso : a=4.488 AU, e=0.751, inc=2.2°
+   ⏳ Geração 10 rodando... Melhor até agora: 0.01893115
+
+🎯 [BOOOM!] NOVO RECORDE — Geração 12
+   Delta a (Erro) : 0.00022390 AU
+   Massa Intruso  : 1.29e-04 Msun (~42.9 Massas Terrestres)
+   Órbita Intruso : a=4.556 AU, e=0.702, inc=0.4°
+   ⏳ Geração 20 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 30 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 40 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 50 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 60 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 70 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 80 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 90 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 100 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 110 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 120 rodando... Melhor até agora: 0.00022390
+   ⏳ Geração 130 rodando... Melhor até agora: 0.00022390
+
+🎯 [BOOOM!] NOVO RECORDE — Geração 135
+   Delta a (Erro) : 0.00006564 AU
+   Massa Intruso  : 1.33e-04 Msun (~44.2 Massas Terrestres)
+   Órbita Intruso : a=4.865 AU, e=0.702, inc=0.5°
+   ⏳ Geração 140 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 150 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 160 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 170 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 180 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 190 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 200 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 210 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 220 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 230 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 240 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 250 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 260 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 270 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 280 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 290 rodando... Melhor até agora: 0.00006564
+   ⏳ Geração 300 rodando... Melhor até agora: 0.00006564
+
+============================================================
+🏆 BUSCA FINALIZADA COM SUCESSO!
+   Física: Marte estabilizado com Erro de 0.00006564 AU
+   Massa Intruso: 44.2 Massas Terrestres
+============================================================

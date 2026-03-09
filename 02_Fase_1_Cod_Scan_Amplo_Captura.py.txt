@@ -1,0 +1,212 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from itertools import product
+
+# ── CONSTANTES ──────────────────────────────────────────
+G_nat  = 4 * np.pi**2
+AU     = 1.496e11
+RE     = 6.371e6
+RE_AU  = RE / AU
+
+M_sol   = 1.0
+M_terra = 5.972e24 / 1.989e30
+M_agua_marte = 2.3e19                          # ← corrigido
+M_marte = (6.417e23 + M_agua_marte) / 1.989e30 # ← corrigido
+M_lua   = 7.342e22 / 1.989e30
+
+masses = np.array([M_sol, M_terra, M_marte, M_lua])
+N = 4
+
+# ── PARÂMETROS FIXOS ────────────────────────────────────
+r_terra_0  = 0.990
+r_marte_0  = 1.3572          # ← corrigido
+ang_marte  = np.radians(60)
+
+def v_circ(r, m=1.0):
+    return np.sqrt(G_nat * m / r)
+
+v_terra = v_circ(r_terra_0)
+v_marte = v_circ(r_marte_0)
+
+pos_sol   = np.array([0.0, 0.0])
+vel_sol   = np.array([0.0, 0.0])
+pos_terra = np.array([r_terra_0, 0.0])
+vel_terra = np.array([0.0, v_terra])
+pos_marte = np.array([r_marte_0 * np.cos(ang_marte),
+                      r_marte_0 * np.sin(ang_marte)])
+vel_marte = np.array([-v_marte * np.sin(ang_marte),
+                       v_marte * np.cos(ang_marte)])
+
+# ── N-CORPOS ─────────────────────────────────────────────
+def derivs(state):
+    pos = state[:2*N].reshape(N, 2)
+    vel = state[2*N:].reshape(N, 2)
+    acc = np.zeros((N, 2))
+    soft = 1e-9
+    for i in range(1, N):
+        for j in range(N):
+            if i == j: continue
+            dr   = pos[j] - pos[i]
+            dist = np.sqrt(np.dot(dr, dr) + soft**2)
+            acc[i] += G_nat * masses[j] / dist**3 * dr
+    acc[0] = np.array([0.0, 0.0])
+    return np.concatenate([vel.flatten(), acc.flatten()])
+
+def rk4_step(state, dt):
+    k1 = derivs(state)
+    k2 = derivs(state + dt/2 * k1)
+    k3 = derivs(state + dt/2 * k2)
+    k4 = derivs(state + dt   * k3)
+    return state + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+
+def energia_total(state):
+    pos = state[:2*N].reshape(N, 2)
+    vel = state[2*N:].reshape(N, 2)
+    Ec  = 0.5 * sum(masses[i] * np.dot(vel[i], vel[i])
+                    for i in range(N))
+    Ep  = 0.0
+    for i in range(N):
+        for j in range(i+1, N):
+            dr = np.linalg.norm(pos[i] - pos[j])
+            Ep -= G_nat * masses[i] * masses[j] / dr
+    return Ec + Ep
+
+def build_state(theta_deg, v_inf_frac, r_entrada_RE):
+    theta     = np.radians(theta_deg)
+    r_lua_AU  = r_entrada_RE * RE_AU
+    pos_lua_rel = np.array([np.cos(theta), np.sin(theta)]) * r_lua_AU
+    pos_lua     = pos_terra + pos_lua_rel
+    v_circ_lua = v_circ(r_lua_AU, M_terra)
+    v_inf = v_inf_frac * v_circ_lua
+    tang = np.array([-np.sin(theta), np.cos(theta)])
+    radial  = -np.array([np.cos(theta), np.sin(theta)])
+    v_rel   = tang * v_circ_lua * 0.85 + radial * v_inf
+    vel_lua = vel_terra + v_rel
+    pos0 = np.concatenate([pos_sol, pos_terra, pos_marte, pos_lua])
+    vel0 = np.concatenate([vel_sol, vel_terra, vel_marte, vel_lua])
+    return np.concatenate([pos0, vel0])
+
+def simula_captura(theta_deg, v_inf_frac, r_entrada_RE,
+                   t_max_dias=180, dt_horas=1.0):
+    dt      = (dt_horas / 24.0) / 365.25
+    n_steps = int((t_max_dias / 365.25) / dt)
+    state = build_state(theta_deg, v_inf_frac, r_entrada_RE)
+    E0    = energia_total(state)
+    r_min = np.inf
+    r_max = 0.0
+    t_captura = None
+    capturada = False
+    for step in range(n_steps):
+        state = rk4_step(state, dt)
+        t_now = step * dt * 365.25
+        pos = state[:2*N].reshape(N, 2)
+        d_AU = np.linalg.norm(pos[3] - pos[1])
+        d_RE = d_AU * AU / RE
+        if d_RE < r_min: r_min = d_RE
+        if d_RE > r_max: r_max = d_RE
+        if d_RE > r_entrada_RE * 2:
+            break
+        E_now = energia_total(state)
+        if d_RE < 100 and E_now < 0 and not capturada:
+            t_captura = t_now
+            capturada = True
+    pos   = state[:2*N].reshape(N, 2)
+    d_fin = np.linalg.norm(pos[3] - pos[1]) * AU / RE
+    E_fin = energia_total(state)
+    return {
+        'theta'      : theta_deg,
+        'v_inf_frac' : v_inf_frac,
+        'r_entrada'  : r_entrada_RE,
+        'r_final_RE' : d_fin,
+        'r_min_RE'   : r_min,
+        'r_max_RE'   : r_max,
+        't_captura'  : t_captura,
+        'capturada'  : capturada,
+        'E_final'    : E_fin,
+        'dE_frac'    : abs((E_fin - E0) / E0),
+    }
+
+# ── GRID DE SCAN ─────────────────────────────────────────
+thetas      = np.arange(0,   361, 15)
+v_inf_fracs = np.arange(0.0, 0.42, 0.07)
+r_entradas  = [150, 250, 400]
+
+total    = len(thetas) * len(v_inf_fracs) * len(r_entradas)
+contador = 0
+sucessos = []
+
+TARGET     = 60.27
+TOLERANCIA = 10.0
+
+print(f"{'═'*60}")
+print(f"  1_scan_captura_lunar.py")
+print(f"  SCAN DE CAPTURA LUNAR — {total} cenários")
+print(f"  critério: r_final = {TARGET} ± {TOLERANCIA} R⊕")
+print(f"{'═'*60}\n")
+
+for r_ent, v_frac, theta in product(r_entradas, v_inf_fracs, thetas):
+    contador += 1
+    res = simula_captura(theta, v_frac, r_ent)
+    hit = (res['capturada'] and
+           abs(res['r_final_RE'] - TARGET) < TOLERANCIA)
+    if hit:
+        sucessos.append(res)
+        print(f"  ✅ HIT #{len(sucessos):03d}"
+              f"  θ={theta:5.1f}°"
+              f"  v_inf={v_frac:.2f}×v_circ"
+              f"  r_ent={r_ent} R⊕"
+              f"  → r_fin={res['r_final_RE']:.2f} R⊕"
+              f"  t_cap={res['t_captura']:.1f} dias")
+    if contador % 50 == 0:
+        pct = 100 * contador / total
+        print(f"  {pct:5.1f}%  cenários: {contador}/{total}"
+              f"  hits: {len(sucessos)}")
+
+print(f"\n{'═'*60}")
+print(f"  SCAN CONCLUÍDO")
+print(f"  Total cenários : {total}")
+print(f"  Sucessos       : {len(sucessos)}")
+print(f"{'═'*60}")
+
+if len(sucessos) > 0:
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+    fig.patch.set_facecolor('#0a0a0a')
+    cores = {150: '#4FC3F7', 250: '#FF6B35', 400: '#69F0AE'}
+    ax = axes[0]; ax.set_facecolor('#0d1117')
+    for r_ent in r_entradas:
+        sub = [s for s in sucessos if s['r_entrada'] == r_ent]
+        if sub:
+            ax.scatter([s['theta'] for s in sub],
+                       [s['r_final_RE'] for s in sub],
+                       c=cores[r_ent], s=80,
+                       label=f'r_ent={r_ent} R⊕', zorder=5)
+    ax.axhline(TARGET,            color='white', lw=1.5, ls='-',  alpha=0.8, label=f'Alvo {TARGET} R⊕')
+    ax.axhline(TARGET+TOLERANCIA, color='white', lw=0.8, ls='--', alpha=0.4)
+    ax.axhline(TARGET-TOLERANCIA, color='white', lw=0.8, ls='--', alpha=0.4)
+    ax.set_title('Ângulo de entrada vs r_final', color='white', fontsize=12)
+    ax.set_xlabel('θ entrada (graus)', color='white')
+    ax.set_ylabel('r_final (R⊕)',      color='white')
+    ax.tick_params(colors='white')
+    ax.legend(fontsize=9, facecolor='#1a1a2e', edgecolor='white', labelcolor='white')
+    ax.grid(True, alpha=0.15)
+    ax = axes[1]; ax.set_facecolor('#0d1117')
+    sc = ax.scatter([s['theta'] for s in sucessos],
+                    [s['v_inf_frac'] for s in sucessos],
+                    c=[s['r_final_RE'] for s in sucessos],
+                    cmap='plasma', s=100, zorder=5)
+    cb = plt.colorbar(sc, ax=ax)
+    cb.set_label('r_final (R⊕)', color='white')
+    cb.ax.yaxis.set_tick_params(color='white')
+    plt.setp(cb.ax.yaxis.get_ticklabels(), color='white')
+    ax.set_title('Espaço de soluções: θ × v_inf', color='white', fontsize=12)
+    ax.set_xlabel('θ entrada (graus)', color='white')
+    ax.set_ylabel('v_inf / v_circ',    color='white')
+    ax.tick_params(colors='white')
+    ax.grid(True, alpha=0.15)
+    plt.tight_layout()
+    plt.savefig('1_scan_captura_lunar.png', dpi=150,
+                bbox_inches='tight', facecolor='#0a0a0a')
+    plt.show()
+    print("Salvo: 1_scan_captura_lunar.png ✅")
+else:
+    print("\n  ⚠️  Nenhum hit encontrado")

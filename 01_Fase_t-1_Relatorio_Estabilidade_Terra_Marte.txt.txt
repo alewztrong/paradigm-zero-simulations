@@ -1,0 +1,124 @@
+RELATÓRIO TÉCNICO — SIMULAÇÃO T-1
+1. IDENTIFICAÇÃO
+
+
+Simulação:     T-1
+Integrador:    REBOUND IAS15
+Objetivo:      Verificar estabilidade orbital
+               do cenário proposto
+2. PARÂMETROS DE ENTRADA
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TERRA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Período orbital        360 dias
+Excentricidade         0,00 / 0,01 / 0,05
+Inclinação axial       0°
+Cobertura oceânica     50% / 60% / 70%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MARTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Períodos testados      28 valores
+Faixas de ressonância  4:3 / 3:2 / 2:1 / 3:1
+Massa de água          3 valores testados
+Inclinação axial       ~25°
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOTAL DE CENÁRIOS      864
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. MELHOR RESULTADO OBTIDO
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONFIGURAÇÃO ÓTIMA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Terra:     360 dias
+Marte:     540 dias
+Ressonância: 3:2 (exata)
+Excentricidade Terra:  0,01
+Cobertura oceânica:    60%
+Massa água Marte:      2,3 × 10¹⁹ kg
+Inclinação Terra:      0°
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MÉTRICAS DE ESTABILIDADE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var_a          0,000002   ← variação semi-eixo
+var_e          0,000003   ← variação excentricidade
+desvio_P       0,000000   ← desvio de período
+Score orbital  1,000
+Score dinâmico 1,000
+Score CM       1,000
+Score físico   1,000
+Score final    1,000
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. TABELA COMPARATIVA — CENÁRIO ATUAL vs. T-1
+🌍 TERRA
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PARÂMETRO            ATUAL              T-1 SIMULADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Período orbital      365,25 dias        360,00 dias
+Semi-eixo           1,0000 AU           0,9898 AU
+Excentricidade      0,0167              0,0100
+Inclinação axial    23,44°              0,00°
+Cobertura oceânica  71%                 60%
+Estações do ano     4 estações          Nenhuma
+Estabilizador axial não parametrizado   Marte (ressonância)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 MARTE
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PARÂMETRO            ATUAL              T-1 SIMULADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Período orbital      686,97 dias        540,00 dias
+Semi-eixo           1,5237 AU           1,3572 AU
+Excentricidade      0,0935              0,0200
+Inclinação axial    25,19°              ~25°
+Água superficial    traços polares      2,3 × 10¹⁹ kg
+Oceano boreal       não                 sim
+CM deslocamento     assimetria crustal  −35,792 km (z)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌍🔴 SISTEMA TERRA–MARTE
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PARÂMETRO            ATUAL              T-1 SIMULADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Razão de períodos    1 : 1,880          3 : 2 (exata)
+Ressonância orbital  nenhuma            3:2 travada
+Estabilidade mútua   não testada        Score 1,000
+Score final          —                  1,000
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. CONCLUSÕES DIRETAS DA SIMULAÇÃO
+
+
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║  1. O cenário T-1 é fisicamente estável                  ║
+║     Score = 1,000 em todas as métricas                   ║
+║                                                          ║
+║  2. A ressonância 3:2 Terra–Marte                        ║
+║     é a configuração de maior estabilidade               ║
+║     entre todas as 864 testadas                          ║
+║                                                          ║
+║  3. Terra com inclinação 0° é compatível                 ║
+║     com estabilidade orbital plena                       ║
+║                                                          ║
+║  4. Marte com oceano boreal é compatível                 ║
+║     com o cenário de equilíbrio dinâmico                 ║
+║                                                          ║
+║  5. A ressonância 3:2 atua como                          ║
+║     estabilizador da inclinação axial                    ║
+║     da Terra no cenário proposto                         ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+6. O QUE A SIMULAÇÃO NÃO RESPONDE
+
+
+Época em que o cenário ocorreu     → não parametrizado
+Duração do cenário                 → não parametrizado
+Causa do fim do cenário            → não parametrizado
+Origem da Lua                      → não parametrizado
+Eventos de impacto                 → não parametrizado

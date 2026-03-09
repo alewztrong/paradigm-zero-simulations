@@ -1,0 +1,30 @@
+ ════════════════════════════════════════════════════════════
+  🚀 SIMULAÇÃO DEFINITIVA DO CATACLISMO (5 CORPOS)
+  Alvo de Marte: ~1.524 AU
+════════════════════════════════════════════════════════════
+  Rodando 1,826 passos diários...
+
+  ✅ LUA CAPTURADA em t = 7.0 dias! (Distância: 68.3 R⊕)
+
+════════════════════════════════════════════════════════════
+  💥 RELATÓRIO PÓS-CATACLISMO (t = 5.0 anos)
+════════════════════════════════════════════════════════════
+  MARTE:
+    a_inicial : 1.3572 AU
+    a_final   : 1.5335 AU  <-- O GRANDE SALTO!
+  LUA:
+    Dist final Terra-Lua: 43.8 R⊕
+  GIGANTE:
+    Dist mínima de Marte : 0.0086 AU (Passou raspando!)
+════════════════════════════════════════════════════════════
+  Salvo: 4_O_Cataclismo_Final.png
+
+════════════════════════════════════════════════════════════
+  🔭 VETOR DE FUGA DO GIGANTE DE GELO
+════════════════════════════════════════════════════════════
+  Após o choque com Marte, esta é a rota do Assassino:
+  Semi-eixo Maior (a): 4.8583 AU
+  Excentricidade (e) : 0.7207
+  Afério (Dist Máx)  : 8.3597 AU
+  Período Orbital    : 10.71 Anos
+════════════════════════════════════════════════════════════

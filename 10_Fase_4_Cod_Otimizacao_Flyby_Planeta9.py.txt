@@ -1,0 +1,188 @@
+# ==============================================================================
+# SIMULAÇÃO FLYBY — FASE 4 (V3 PLUS - COLAB EDITION)
+# Física: REBOUND (IAS15) | Arquitetura: Multi-Core + Google Drive Checkpoint
+# ==============================================================================
+
+!pip install rebound numpy scipy > /dev/null 2>&1
+
+import rebound
+import numpy as np
+from scipy.optimize import differential_evolution
+import pickle
+import os
+import time
+from datetime import datetime
+
+# ---------------------------------------------------------
+# 1. PROTEÇÃO ANTI-QUEDA (CONECTANDO AO GOOGLE DRIVE)
+# ---------------------------------------------------------
+try:
+    from google.colab import drive
+    drive.mount('/content/drive')
+    # O arquivo será salvo na raiz do seu Google Drive!
+    CHECKPOINT_FILE = "/content/drive/MyDrive/checkpoint_fase4_v3plus.pkl"
+    print("✅ Google Drive conectado! Checkpoints estão BLINDADOS.")
+except:
+    print("⚠️  Aviso: Não rodando no Colab ou Drive não montado. Salvando localmente.")
+    CHECKPOINT_FILE = "checkpoint_fase4_v3plus.pkl"
+
+# ---------------------------------------------------------
+# 2. CONSTANTES FÍSICAS REAIS E LORE DO PROJETO
+# ---------------------------------------------------------
+MSUN       = 1.0
+MJUPITER   = 9.543e-4          # Júpiter é a âncora que limpa o sistema
+MMARTE     = 0.95 * 3.213e-7   # 95% do Proto-Marte (Lore pré-fase 4)
+ALVO_MARTE = 1.52370           # A órbita mágica atual
+MARTE_INIT = 1.35720           # De onde ele partiu
+T_SIM      = 500               # Anos de simulação (tempo suficiente para o Flyby e Ejeção)
+
+# ---------------------------------------------------------
+# 3. O CORAÇÃO DA FÍSICA: REBOUND (IAS15)
+# ---------------------------------------------------------
+def simular_flyby(params):
+    # Parâmetros que a IA está tentando adivinhar:
+    m_proto, a_proto, e_proto, inc_proto, omega_proto, M_proto = params
+
+    sim = rebound.Simulation()
+    sim.integrator = "ias15"  # Integrador adaptativo de altíssima precisão
+    sim.units = ('yr', 'AU', 'Msun')
+
+    try:
+        # Adicionando os atores na ordem:
+        sim.add(m=MSUN) # Sol (Índice 0)
+        sim.add(m=MJUPITER, a=5.203, e=0.048) # Júpiter (Índice 1)
+        sim.add(m=MMARTE, a=MARTE_INIT, e=0.093) # Marte (Índice 2)
+
+        # O Intruso (Índice 3)
+        sim.add(m=m_proto, a=a_proto, e=e_proto, inc=np.radians(inc_proto),
+                omega=np.radians(omega_proto), M=np.radians(M_proto))
+
+        sim.move_to_com() # Centraliza o centro de massa
+
+        # Roda a simulação pelos anos críticos (o caos)
+        sim.integrate(T_SIM)
+
+        # Pega a órbita final de Marte
+        marte = sim.particles[2]
+        a_marte_final = marte.a
+
+        # Pega a órbita do intruso para garantir que Júpiter o expulsou
+        proto = sim.particles[3]
+
+        # Punições rigorosas:
+        if a_marte_final < 0.5 or a_marte_final > 3.0:
+            return 1e10 # Marte foi ejetado ou caiu no Sol
+
+        if proto.a > 0 and proto.a < 4.0:
+            # O intruso continuou no sistema interno ameaçando a Terra! Punir!
+            return 1e5 + abs(a_marte_final - ALVO_MARTE)
+
+        # O Score Perfeito: Quão perto Marte chegou de 1.5237 AU?
+        score = abs(a_marte_final - ALVO_MARTE)
+        return score
+
+    except Exception as ex:
+        # Se os planetas colidirem, a física quebra (exceção do rebound)
+        return 1e10
+
+# ---------------------------------------------------------
+# 4. SISTEMA DE SALVAMENTO BLINDADO
+# ---------------------------------------------------------
+best_score = [1e10]
+best_params = [None]
+step_atual = [0]
+
+def salvar_checkpoint(step, score, params):
+    data = {
+        "step": step,
+        "score": score,
+        "params": params,
+        "timestamp": datetime.now().isoformat()
+    }
+    with open(CHECKPOINT_FILE, "wb") as f:
+        pickle.dump(data, f)
+
+def carregar_checkpoint():
+    if os.path.exists(CHECKPOINT_FILE):
+        try:
+            with open(CHECKPOINT_FILE, "rb") as f:
+                data = pickle.load(f)
+            print(f"🔄 SUCESSO! Checkpoint recuperado do passo {data['step']}. Score anterior: {data['score']:.8f}")
+            return data
+        except:
+            print("⚠️ Erro ao ler o checkpoint. Começando do zero.")
+    return None
+
+def callback_salvamento(xk, convergence=None):
+    step_atual[0] += 1
+    score = simular_flyby(xk)
+
+    if score < best_score[0]:
+        best_score[0] = score
+        best_params[0] = xk.copy()
+
+        print(f"\n🎯 [BOOOM!] NOVO RECORDE — Geração {step_atual[0]}")
+        print(f"   Delta a (Erro) : {score:.8f} AU")
+        print(f"   Massa Intruso  : {xk[0]:.2e} Msun (~{(xk[0]*333000):.1f} Massas Terrestres)")
+        print(f"   Órbita Intruso : a={xk[1]:.3f} AU, e={xk[2]:.3f}, inc={xk[3]:.1f}°")
+
+        # Salva imediatamente no Google Drive
+        salvar_checkpoint(step_atual[0], score, xk)
+    else:
+        # Mostra que o script continua vivo, mesmo sem recorde
+        if step_atual[0] % 10 == 0:
+            print(f"   ⏳ Geração {step_atual[0]} rodando... Melhor até agora: {best_score[0]:.8f}")
+
+# ---------------------------------------------------------
+# 5. O MOTOR DE BUSCA (A CAÇADA)
+# ---------------------------------------------------------
+# Limites da IA: O que ela pode testar?
+bounds = [
+    (1.0e-4, 1.5e-4), # Massa: Entre ~33 e ~50 Massas Terrestres (Você pediu ~39!)
+    (2.0, 7.0),       # Semieixo (a): Entre Marte e Júpiter
+    (0.4, 0.95),      # Excentricidade (e): Altamente elíptica para cruzar as órbitas
+    (0.0, 15.0),      # Inclinação em graus
+    (0.0, 360.0),     # Argumento do periélio
+    (0.0, 360.0)      # Anomalia média (posição inicial)
+]
+
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("🚀 INICIANDO V3 PLUS: BUSCA PELO GIGANTE DE GELO")
+    print("="*60)
+
+    x0 = None
+    checkpoint = carregar_checkpoint()
+
+    if checkpoint:
+        x0 = checkpoint["params"]
+        best_score[0] = checkpoint["score"]
+        best_params[0] = x0
+        print("▶️ Retomando busca a partir da melhor solução salva!")
+    else:
+        print("▶️ Iniciando uma busca do zero Absoluto...")
+
+    inicio = time.time()
+
+    try:
+        # Algoritmo Genético de Força Bruta
+        resultado = differential_evolution(
+            simular_flyby,
+            bounds,
+            maxiter=300,        # Número máximo de gerações
+            popsize=15,         # Indivíduos por geração
+            mutation=(0.5, 1.2),# Taxa de mutação focada
+            recombination=0.8,  # Troca de DNA genético
+            workers=-1,         # Usa 100% da CPU do Colab
+            callback=callback_salvamento,
+            x0=x0               # Injeta o DNA do checkpoint se existir
+        )
+
+        print("\n" + "="*60)
+        print("🏆 BUSCA FINALIZADA COM SUCESSO!")
+        print(f"   Física: Marte estabilizado com Erro de {resultado.fun:.8f} AU")
+        print(f"   Massa Intruso: {(resultado.x[0]*333000):.1f} Massas Terrestres")
+        print("="*60)
+
+    except KeyboardInterrupt:
+        print("\n⛔ Simulação pausada manualmente. Checkpoint salvo no Drive!")
